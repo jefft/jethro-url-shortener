@@ -1,0 +1,49 @@
+{
+  "$schema": "https://raw.githubusercontent.com/jetify-com/devbox/0.17.3/.schema/devbox.schema.json",
+  "packages": [
+    "nodejs_24",
+    "php",
+    "python@latest"
+  ],
+  "env_from": ".env",
+  "shell": {
+    "init_hook": [
+      "test -d .venv || uv venv",
+      "export VIRTUAL_ENV=$PWD/.venv",
+      "export PATH=$PWD/.venv/bin:$PATH",
+      "uv pip install -q -r requirements.txt",
+      "echo 'Ready — jethro.au shortener' > /dev/null"
+    ],
+    "scripts": {
+      "test":            "php test.php \"$@\"",
+      "deploy": "npx wrangler deploy",
+      "help": [
+        "echo '  deploy                          Redeploy the worker'",
+        "echo ''",
+        "echo '  shorten <url> [campaign]      Create a short URL'",
+        "echo '  stats <code>                  Get click stats'",
+        "echo '  list-urls                      List all active URLs'",
+        "echo '  update-url <code> <url> [camp] Update a URL'",
+        "echo '  delete-url <code>              Soft-delete a URL'",
+        "echo '  restore-url <code>             Restore a soft-deleted URL'",
+        "echo '  delete-permanent <code>        Permanently delete a URL'",
+        "echo '  create-key [--type] <label>     Create an API key'",
+        "echo '  list-keys                      List all API keys'",
+        "echo '  revoke-key <id>                Revoke an API key'",
+        "echo '  redirect <code>                Show redirect target'",
+        "echo '  help                           Show this help'"
+      ],
+      "shorten":          "scripts/shortener shorten \"$@\"",
+      "list-urls":        "scripts/shortener list-urls",
+      "list-keys":        "scripts/shortener list-keys",
+      "stats":            "scripts/shortener stats \"$@\"",
+      "update-url":       "scripts/shortener update-url \"$@\"",
+      "delete-url":       "scripts/shortener delete-url \"$@\"",
+      "restore-url":      "scripts/shortener restore-url \"$@\"",
+      "delete-permanent": "scripts/shortener delete-permanent \"$@\"",
+      "create-key":       "scripts/shortener create-key \"$@\"",
+      "revoke-key":       "scripts/shortener revoke-key \"$@\"",
+      "redirect":         "scripts/shortener redirect \"$@\""
+    }
+  }
+}

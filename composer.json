@@ -1,0 +1,17 @@
+{
+    "name": "jefft/jethro-url-shortener",
+    "description": "Self-hosted URL shortener on Cloudflare Workers with deterministic codes and multi-key auth",
+    "type": "project",
+    "require": {
+        "php": ">=8.1",
+        "ext-curl": "*",
+        "ext-json": "*",
+        "ext-hash": "*"
+    },
+    "autoload": {
+        "files": ["src/UrlShortener.php"]
+    },
+    "scripts": {
+        "test": "php test.php"
+    }
+}

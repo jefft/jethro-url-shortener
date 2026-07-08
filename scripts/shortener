@@ -1,0 +1,182 @@
+#!/usr/bin/env python3
+"""CLI for the Cloudflare URL shortener API.
+
+Reads URLSHORTENER_BASE_URL and URLSHORTENER_ADMIN_KEY from the .env file in the project root.
+Invoked via devbox:  devbox run shorten <url> [campaign]
+"""
+
+import argparse
+import json
+import os
+import sys
+import requests
+from pathlib import Path
+
+
+def load_env() -> dict[str, str]:
+    """Load .env from the project root, one directory above this script."""
+    root = Path(__file__).resolve().parent.parent
+    env_file = root / ".env"
+    env: dict[str, str] = {}
+    if env_file.is_file():
+        for line in env_file.read_text().splitlines():
+            line = line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            key, _, val = line.partition("=")
+            key = key.strip()
+            val = val.strip().strip('"').strip("'")
+            env[key] = val
+    return env
+
+
+def auth_header(admin_key: str) -> str:
+    return f"Bearer {admin_key}"
+
+
+def json_request(
+    method: str,
+    url: str,
+    *,
+    headers: dict[str, str] | None = None,
+    body: dict | None = None,
+) -> dict:
+    """Make an HTTP request, parse JSON response, pretty-print it, return it."""
+    req_headers = {"User-Agent": "jethro.au-shortener/1.0"}
+    if headers:
+        req_headers.update(headers)
+
+    kwargs: dict = {}
+    if body is not None:
+        kwargs["json"] = body
+    elif method in ("POST", "PUT"):
+        kwargs["json"] = {}
+
+    try:
+        resp = requests.request(method, url, headers=req_headers, **kwargs)
+        resp.raise_for_status()
+        result = resp.json()
+    except requests.exceptions.HTTPError as e:
+        print(f"HTTP {e.response.status_code}", file=sys.stderr)
+        try:
+            result = e.response.json()
+            json.dump(result, sys.stdout, indent=2)
+            print()
+        except (json.JSONDecodeError, ValueError):
+            print(e.response.text.strip() or "(empty response body)", file=sys.stderr)
+        sys.exit(1)
+
+    json.dump(result, sys.stdout, indent=2)
+    print()
+    return result
+
+def require(v: str | None, name: str) -> str:
+    if not v:
+        print(f"Error: {name} not set. Set in .env and run: devbox shell", file=sys.stderr)
+        sys.exit(1)
+    return v
+
+
+def main() -> None:
+    env = load_env()
+    base_url = require(env.get("URLSHORTENER_BASE_URL"), "URLSHORTENER_BASE_URL").rstrip("/")
+    admin_key = require(env.get("URLSHORTENER_ADMIN_KEY"), "URLSHORTENER_ADMIN_KEY")
+
+    parser = argparse.ArgumentParser(description="Cloudflare URL shortener CLI")
+    sub = parser.add_subparsers(dest="command", required=True)
+
+    # shorten <url> [campaign]
+    p = sub.add_parser("shorten", help="Create a short URL")
+    p.add_argument("url", help="Long URL to shorten")
+    p.add_argument("campaign", nargs="?", default="general", help="Campaign label")
+
+    # stats <code>
+    p = sub.add_parser("stats", help="Get click stats")
+    p.add_argument("code", help="Short code")
+
+    # list-urls
+    sub.add_parser("list-urls", help="List all active URLs")
+
+    # list-keys
+    sub.add_parser("list-keys", help="List all API keys")
+
+    # update-url <code> <url> [campaign]
+    p = sub.add_parser("update-url", help="Update a URL")
+    p.add_argument("code", help="Short code")
+    p.add_argument("url", help="New long URL")
+    p.add_argument("campaign", nargs="?", default=None, help="New campaign (default: unchanged)")
+
+    # delete-url <code>
+    p = sub.add_parser("delete-url", help="Soft-delete a URL")
+    p.add_argument("code", help="Short code")
+
+    # restore-url <code>
+    p = sub.add_parser("restore-url", help="Restore a soft-deleted URL")
+    p.add_argument("code", help="Short code")
+
+    # delete-permanent <code>
+    p = sub.add_parser("delete-permanent", help="Permanently delete a URL")
+    p.add_argument("code", help="Short code")
+
+    # create-key [--type TYPE] <label>
+    p = sub.add_parser("create-key", help="Create an API key")
+    p.add_argument("label", help="Key label")
+    p.add_argument("--type", default="create", help="Key type (default: create)")
+
+    # revoke-key <id>
+    p = sub.add_parser("revoke-key", help="Revoke an API key")
+    p.add_argument("id", help="Key ID")
+
+    # redirect <code>
+    p = sub.add_parser("redirect", help="Show redirect target")
+    p.add_argument("code", help="Short code")
+
+    args = parser.parse_args()
+    cmd = args.command
+    auth = auth_header(admin_key)
+
+    if cmd == "shorten":
+        json_request("POST", f"{base_url}/api/shorten", headers={"Authorization": auth}, body={"url": args.url, "campaign": args.campaign})
+
+    elif cmd == "stats":
+        json_request("GET", f"{base_url}/api/stats/{args.code}")
+
+    elif cmd == "list-urls":
+        json_request("GET", f"{base_url}/api/urls", headers={"Authorization": auth})
+
+    elif cmd == "list-keys":
+        json_request("GET", f"{base_url}/api/keys", headers={"Authorization": auth})
+
+    elif cmd == "update-url":
+        body = {"url": args.url}
+        if args.campaign is not None:
+            body["campaign"] = args.campaign
+        json_request("PUT", f"{base_url}/api/urls/{args.code}", headers={"Authorization": auth}, body=body)
+
+    elif cmd == "delete-url":
+        json_request("DELETE", f"{base_url}/api/urls/{args.code}", headers={"Authorization": auth})
+
+    elif cmd == "restore-url":
+        json_request("POST", f"{base_url}/api/urls/{args.code}/restore", headers={"Authorization": auth})
+
+    elif cmd == "delete-permanent":
+        json_request("DELETE", f"{base_url}/api/urls/{args.code}/permanent", headers={"Authorization": auth})
+
+    elif cmd == "create-key":
+        json_request("POST", f"{base_url}/api/keys", headers={"Authorization": auth}, body={"type": args.type, "label": args.label})
+
+    elif cmd == "revoke-key":
+        json_request("DELETE", f"{base_url}/api/keys/{args.id}", headers={"Authorization": auth})
+
+    elif cmd == "redirect":
+        # Show redirect target (follow redirects but show response headers)
+        resp = requests.get(f"{base_url}/s/{args.code}", allow_redirects=True)
+        print(f"HTTP {resp.status_code}")
+        for k, v in resp.headers.items():
+            print(f"{k}: {v}")
+        if not resp.ok:
+            sys.exit(1)
+
+
+if __name__ == "__main__":
+    main()

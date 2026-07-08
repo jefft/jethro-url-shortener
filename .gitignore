@@ -1,0 +1,15 @@
+node_modules
+.wrangler
+wrangler.toml
+README.jethro.md
+devbox.d
+.env
+.env.*
+.dev.vars
+*.log
+dist
+build
+scripts/__pycache__
+.venv/
+.idea
+NEXT_STEPS.md

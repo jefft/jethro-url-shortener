@@ -1,0 +1,57 @@
+name = "url-shortener"
+main = "worker.js"
+compatibility_date = "2026-05-01"
+
+# Enable Workers Cache for edge-cached redirects and stats.
+# Only responses with explicit Cache-Control headers are cached.
+# Requests with Authorization headers automatically bypass cache.
+cache = { enabled = true }
+
+# KV namespace binding for URL mappings and stats
+# Create with: wrangler kv namespace create URL_MAPPINGS
+[[kv_namespaces]]
+binding = "URL_MAPPINGS"
+id = "YOUR_KV_NAMESPACE_ID"
+
+# Route /s/* and /api/* paths to this Worker on your domain
+[[routes]]
+pattern = "yourdomain.com/s/*"
+zone_name = "yourdomain.com"
+
+[[routes]]
+pattern = "yourdomain.com/api/shorten"
+zone_name = "yourdomain.com"
+
+[[routes]]
+pattern = "yourdomain.com/api/stats/*"
+zone_name = "yourdomain.com"
+
+[[routes]]
+pattern = "yourdomain.com/api/urls"
+zone_name = "yourdomain.com"
+
+[[routes]]
+pattern = "yourdomain.com/api/urls/*"
+zone_name = "yourdomain.com"
+
+[[routes]]
+pattern = "yourdomain.com/api/keys"
+zone_name = "yourdomain.com"
+
+[[routes]]
+pattern = "yourdomain.com/api/keys/*"
+zone_name = "yourdomain.com"
+
+# Self-service API key signup (Google/GitHub OAuth).
+# Requires secrets: wrangler secret put GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET
+#                   wrangler secret put GITHUB_CLIENT_ID / GITHUB_CLIENT_SECRET
+# Register redirect URIs with each provider:
+#   https://yourdomain.com/auth/google/callback
+#   https://yourdomain.com/auth/github/callback
+[[routes]]
+pattern = "yourdomain.com/signup"
+zone_name = "yourdomain.com"
+
+[[routes]]
+pattern = "yourdomain.com/auth/*"
+zone_name = "yourdomain.com"
