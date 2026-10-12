@@ -8,9 +8,11 @@ Invoked via devbox:  devbox run shorten <url> [campaign]
 import argparse
 import json
 import os
+import subprocess
 import sys
 import requests
 from pathlib import Path
+from urllib.parse import urlparse
 
 
 def load_env() -> dict[str, str]:
@@ -76,6 +78,44 @@ def require(v: str | None, name: str) -> str:
         sys.exit(1)
     return v
 
+def cf_json(*args: str) -> object:
+    """Run `npx cf ...` and parse its JSON output; exit on failure."""
+    proc = subprocess.run(["npx", "cf", *args], capture_output=True, text=True)
+    if proc.returncode != 0:
+        print(proc.stderr.strip() or proc.stdout.strip(), file=sys.stderr)
+        sys.exit(1)
+    return json.loads(proc.stdout)
+
+
+def click_stats(base_url: str, code: str, days: int) -> None:
+    """Count redirects for a code from Cloudflare zone analytics.
+
+    Counts every edge response, including ones served from Workers Cache.
+    Free-plan retention is 31 days; counts are sampled (sum of sampleInterval).
+    """
+    if not code or not all(c.isalnum() or c in "-_" for c in code):
+        print("Error: invalid code", file=sys.stderr)
+        sys.exit(1)
+    host = urlparse(base_url).hostname
+    zones = cf_json("zones", "list", "--name", host)
+    if not zones:
+        print(f"Error: no Cloudflare zone for {host}", file=sys.stderr)
+        sys.exit(1)
+    query = (
+        "SELECT edgeResponseStatus AS status, SUM(sampleInterval) AS requests "
+        "FROM events.httpRequests "
+        f"WHERE clientRequestHttpHost = '{host}' "
+        f"AND (clientRequestPath = '/s/{code}' OR clientRequestPath LIKE '/s/{code}/%') "
+        f"AND timestamp >= NOW() - INTERVAL '{days}' DAY "
+        "GROUP BY status FORMAT JSON"
+    )
+    result = cf_json("sql", "query", "--scope-zone", zones[0]["id"], query)
+    by_status = {int(r["status"]): int(r["requests"]) for r in result["data"]}
+    clicks = by_status.get(302, 0) + by_status.get(303, 0)
+    json.dump({"code": code, "days": days, "clicks": clicks, "by_status": by_status}, sys.stdout, indent=2)
+    print()
+
+
 
 def main() -> None:
     env = load_env()
@@ -95,9 +135,10 @@ def main() -> None:
     p.add_argument("url", help="Long URL to shorten")
     p.add_argument("campaign", nargs="?", default="general", help="Campaign label")
 
-    # stats <code>
-    p = sub.add_parser("stats", help="Get click stats")
+    # stats <code> [--days N]
+    p = sub.add_parser("stats", help="Get click stats from Cloudflare zone analytics (max 31 days)")
     p.add_argument("code", help="Short code")
+    p.add_argument("--days", type=int, default=30, choices=range(1, 31), metavar="1-30", help="Lookback window (default: 30)")
 
     # list-urls
     sub.add_parser("list-urls", help="List all active URLs")
@@ -147,7 +188,7 @@ def main() -> None:
         json_request("POST", f"{base_url}/api/shorten", headers={"Authorization": auth}, body={"url": args.url, "campaign": args.campaign, "block_bots": True})
 
     elif cmd == "stats":
-        json_request("GET", f"{base_url}/api/stats/{args.code}")
+        click_stats(base_url, args.code, args.days)
 
     elif cmd == "list-urls":
         json_request("GET", f"{base_url}/api/urls", headers={"Authorization": auth})

@@ -2,7 +2,7 @@
 URL Shortener Python Client
 A lightweight client for the Cloudflare Workers URL Shortener API.
 
-    export URLSHORTENER_API_KEY=your-api-key         # required (create, stats)
+    export URLSHORTENER_API_KEY=your-api-key         # required (create)
     export URLSHORTENER_ADMIN_KEY=your-admin-key     # optional (list, update, delete, restore)
     export URLSHORTENER_BASE_URL=https://yourdomain.com
 
@@ -93,7 +93,7 @@ class URLShortenerClient:
         return None
 
     def list_urls(self) -> list[dict]:
-        """Return all active (non-deleted) short URLs with stats."""
+        """Return all active (non-deleted) short URLs."""
         try:
             resp = requests.get(
                 f"{self.base_url}/api/urls",
@@ -105,19 +105,6 @@ class URLShortenerClient:
         except Exception as e:
             print(f"Error listing URLs: {e}")
         return []
-
-    def get_stats(self, code: str) -> Optional[dict]:
-        """Return click statistics for a short code."""
-        try:
-            resp = requests.get(
-                f"{self.base_url}/api/stats/{code}",
-                timeout=10,
-            )
-            resp.raise_for_status()
-            return resp.json()
-        except Exception as e:
-            print(f"Error getting stats for {code}: {e}")
-        return None
 
     def update(
         self,
@@ -201,8 +188,6 @@ def shorten_for_social(long_url: str, campaign: str = "social") -> str:
 
 if __name__ == "__main__":
     # Quick demo
-    import json
-
     client = URLShortenerClient()
 
     print("Creating a test short URL...")
@@ -213,11 +198,6 @@ if __name__ == "__main__":
     )
     print(f"Short URL: {short_url}")
 
-    if short_url:
-        code = short_url.split("/s/")[-1]
-        print(f"\nStats for '{code}':")
-        print(json.dumps(client.get_stats(code), indent=2))
-
     print("\nAll active URLs:")
     for u in client.list_urls():
-        print(f"  /s/{u.get('code', '?')} → {u.get('url', '(no url)')} ({u.get('stats', {}).get('total', 0)} clicks)")
+        print(f"  /s/{u.get('code', '?')} → {u.get('url', '(no url)')}")

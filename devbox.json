@@ -15,14 +15,14 @@
       "echo 'Ready — jethro.au shortener' > /dev/null"
     ],
     "scripts": {
-      "test":            "php test.php \"$@\"",
+      "test":            "php src/php/test.php \"$@\"",
       "deploy": "npx cf deploy",
       "help": [
         "echo '  deploy                          Redeploy the worker'",
         "echo ''",
         "echo '  shorten <url> [campaign]      Create a short URL'",
         "echo '  shorten-protected <url> [camp] Create a short URL behind a bot check'",
-        "echo '  stats <code>                  Get click stats'",
+        "echo '  stats <code> [--days N]       Click counts from zone analytics'",
         "echo '  list-urls                      List all active URLs'",
         "echo '  update-url <code> <url> [camp] Update a URL'",
         "echo '  delete-url <code>              Soft-delete a URL'",

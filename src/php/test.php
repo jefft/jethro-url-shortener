@@ -1,6 +1,6 @@
 #!/usr/bin/env php
 <?php
-require_once __DIR__ . '/src/UrlShortener.php';
+require_once __DIR__ . '/UrlShortener.php';
 
 $opts = getopt('', ['apitoken:', 'campaign:']);
 

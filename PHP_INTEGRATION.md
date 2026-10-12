@@ -35,7 +35,7 @@ In your admin settings page or SMS configuration view, add a check: if `URLSHORT
 <?php
 use JethroAuUrlShortener;
 
-require_once 'src/UrlShortener.php';
+require_once 'src/php/UrlShortener.php';
 
 // Build the URL that the signup flow should redirect back to.
 // This must be an absolute URL on the same origin as the signup request.
@@ -67,7 +67,7 @@ At the top of your admin page (before any output), check for the callback:
 <?php
 use JethroAuUrlShortener;
 
-require_once 'src/UrlShortener.php';
+require_once 'src/php/UrlShortener.php';
 
 if (JethroAuUrlShortener::isSignupCallback()) {
     $payload = JethroAuUrlShortener::getTokenFromCallback();

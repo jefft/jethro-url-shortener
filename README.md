@@ -2,15 +2,16 @@
 
 A heavily modified fork of [IAMDevBox/cloudflare-url-shortener](https://github.com/IAMDevBox/cloudflare-url-shortener) deployed at [jethro.au](https://jethro.au), used for shortening URLs in Jethro SMSes.
 
-A production-ready, self-hosted URL shortener built with **Cloudflare Workers** and **KV storage**. Zero cost, global edge performance, and full CRUD admin API with click analytics.
+A production-ready, self-hosted URL shortener built with **Cloudflare Workers** and **KV storage**. Zero cost, global edge performance, and full CRUD admin API. Click counts come from Cloudflare zone analytics.
 
 > 📖 **Upstream tutorial**: [Building a Self-Hosted URL Shortener with Cloudflare Workers](https://www.iamdevbox.com/posts/building-self-hosted-url-shortener-cloudflare-workers/)
 
 ## Features
 
 - **Short URL redirects** — `/s/{code}` → full URL, served from edge cache with stale-while-revalidate
+- **Path and query passthrough** — `/s/{code}/extra/path?x=1` appends the extra path and merges the query into the target
 - **Deterministic short codes** — SHA-256 hash of `(url, campaign, block_bots)` makes creation idempotent: same inputs always produce the same code
-- **Click analytics** — per-code click counters in dedicated KV keys (reads never touch the URL mapping)
+- **Click analytics** — per-code redirect counts from Cloudflare zone analytics (includes cache hits; no KV writes on redirect)
 - **Full CRUD API** — create, list, update, soft-delete, restore, permanent-delete
 - **Multi-key authentication** — admin and create-only API keys with full CRUD management, revocable without rotating the bootstrap key
 - **Self-service signup** — anyone can obtain a create-only key via Google, GitHub, or email magic link at `/signup`
@@ -47,14 +48,22 @@ devbox run shorten-protected https://my-webapp.fly.dev/
 
 and get a shortened URL that opens to a Cloudflare 'turnstile' page checking the requester is human, before redirecting to the shortened app.
 
+### Path and query passthrough
+
+Anything after the code is carried over to the target. If `https://yourdomain.com/s/33b18c` redirects to `https://my-webapp.fly.dev`, then `https://yourdomain.com/s/33b18c/?view=admin__system_configuration` redirects to `https://my-webapp.fly.dev/?view=admin__system_configuration`.
+
+- **Path:** the extra path is appended to the target path without doubling slashes (`/s/{code}/x` on target `https://h/base/` → `https://h/base/x`).
+- **Query:** request parameters are merged into the target's. Where both set the same key, the request wins (`?view=admin` on target `?keep=1&view=home` → `?keep=1&view=admin`); other target parameters keep their original encoding.
+- **Fragment:** a `#fragment` on the target is kept.
+- Applies to every link. The scheme and host always come from the stored target, so a crafted suffix can reach any path on the target host but never another host.
 
 ### No UTM parameter injection
 
-Upstream injects `utm_source`, `utm_medium`, `utm_campaign`, and `utm_content` query parameters on every redirect. This fork has removed all UTM tracking — redirects are clean, preserving only the original target URL.
+Upstream injects `utm_source`, `utm_medium`, `utm_campaign`, and `utm_content` query parameters on every redirect. This fork has removed all UTM tracking — redirects are clean, adding nothing beyond the original target URL and any path/query the visitor supplied.
 
-### Separate click stats
+### No click counting
 
-Upstream stores click statistics in `stats:{code}` KV keys with per-source breakdowns (twitter, linkedin, direct, etc.). This fork stores a simple `{ total }` counter in a dedicated `stats:{code}` key, separate from the URL mapping. Keeping clicks out of the mapping document prevents read-modify-write races where a concurrent admin mutation (delete, update) could be reverted by a stats write holding a stale copy of the mapping.
+Upstream stores click statistics in `stats:{code}` KV keys with per-source breakdowns (twitter, linkedin, direct, etc.). **This fork does not track clicks at all**: redirects write nothing, and there is no stats API endpoint. Use Cloudflare zone analytics instead (see [Click statistics](#click-statistics)). Zone analytics see every edge response, including redirects served from Workers Cache that never reach the Worker, so they are more accurate than an in-Worker counter. They also avoid KV writes, which are capped at 1,000/day on the free tier.
 
 ### Multi-key authentication
 
@@ -89,7 +98,7 @@ Setup is optional — see [step 5 of the Quick Start](#5-optional-enable-self-se
 devbox run test                 # Run functional tests
 devbox run deploy               # Redeploy the worker
 devbox run shorten <url> [c]    # Create a short URL
-devbox run stats <code>         # Get click stats
+devbox run stats <code> [--days N]   # Click counts from zone analytics (≤30 days)
 devbox run list-urls            # List all active URLs
 devbox run list-keys            # List API keys
 devbox run create-key <label> [--type <type>]   # Create an API key
@@ -104,10 +113,10 @@ Environment configured via `.env` (gitignored) and `devbox.json` `env` field, wh
 
 Jethro is PHP, so we provide a PHP library for interacting with the shortener.
 
-`src/UrlShortener.php` — interface + factory for use in any PHP project:
+`src/php/UrlShortener.php` — interface + factory for use in any PHP project:
 
 ```php
-require_once 'src/UrlShortener.php';
+require_once 'src/php/UrlShortener.php';
 
 define('URLSHORTENER', 'jethroau');
 define('URLSHORTENER_API_KEY', 'cus_...');
@@ -133,10 +142,10 @@ $signupUrl = $s->getSignupUrl('https://my.app/callback', 'my-organisation');
 // → https://jethro.au/signup?redirect=...&campaign=my-organisation
 ```
 
-`shorten.php` — CLI frontend using the library:
+`src/php/shorten.php` — CLI frontend using the library:
 
 ```bash
-devbox run -- php shorten.php https://example.com/my-post twitter
+devbox run -- php src/php/shorten.php https://example.com/my-post twitter
 # → https://jethro.au/s/abc123
 ```
 
@@ -144,7 +153,7 @@ devbox run -- php shorten.php https://example.com/my-post twitter
 
 `devbox run test` — PHP functional test against the live API: predicts a short code via `previewShorten()`, creates it via the live API, confirms the codes match, fetches the short URL, and validates the 302 redirect to the original target.
 
-`node test_worker.js` — Worker HTTP integration suite (20 tests). Point it at a deployed worker, or run the worker locally:
+`node test_worker.js` — Worker HTTP integration suite (29 tests). Point it at a deployed worker, or run the worker locally:
 
 ```bash
 # .dev.vars holds local values for secrets declared in cloudflare.config.ts
@@ -163,11 +172,7 @@ BASE_URL=http://localhost:5173 API_KEY=test-key node test_worker.js
 ## Architecture
 
 ```
-User → /s/{code} → Cloudflare Worker (edge, <15ms) → KV lookup → 302 redirect
-                                                     ↓
-                                               Stats increment (async)
-                                               ↓
-                                          Edge cache (1h fresh, 24h stale)
+User → /s/{code} → Edge cache (1h fresh, 24h stale) → Cloudflare Worker (edge, <15ms) → KV lookup → 302 redirect
 ```
 
 ## Quick Start
@@ -356,20 +361,62 @@ Response:
 
 If the same URL + campaign was already created, the response includes `"existing": true` and returns the existing short code (idempotent). `block_bots` is part of the identity: protected and unprotected links to the same URL get different codes (hash of `url::campaign::block_bots`).
 
-`block_bots` links: `GET /s/{code}` returns a Turnstile page; the widget POSTs its token to `/s/{code}`, the worker verifies it with Cloudflare's siteverify API, then 303-redirects and sets a signed `bot_pass` cookie (30 minutes, all `/s/` links) so the visitor isn't challenged again. These responses are never cached, and clicks are counted only after a pass. CLI: `devbox run shorten-protected <url> [campaign]`.
+`block_bots` links: `GET /s/{code}` returns a Turnstile page; the widget POSTs its token to `/s/{code}`, the worker verifies it with Cloudflare's siteverify API, then 303-redirects and sets a signed `bot_pass` cookie (30 minutes, all `/s/` links) so the visitor isn't challenged again. These responses are never cached. CLI: `devbox run shorten-protected <url> [campaign]`.
 
-### Get click statistics
+### Click statistics
+
+The worker does **not** count clicks: there is no counter in KV and no `/api/stats` endpoint. Every request to `/s/{code}` is still logged by Cloudflare's zone analytics, and you can query those logs for free.
+
+Limits:
+
+- **31-day retention** on the free plan. Older data is gone; export it periodically if you need lifetime totals.
+- **Sampled counts.** The `events.httpRequests` dataset is adaptively sampled; `SUM(sampleInterval)` gives an estimate, exact at low traffic.
+- **No visitor detail beyond what Cloudflare logs.** Bots, link-preview fetchers (e.g. SMS/chat apps unfurling the link) and repeat visits all count as requests.
+
+#### CLI (per code)
 
 ```bash
-curl https://yourdomain.com/api/stats/oauth
+devbox run stats <code> [--days N]     # N = 1–30, default 30
 ```
 
-Response:
 ```json
 {
-  "total": 142
+  "code": "oauth",
+  "days": 7,
+  "clicks": 142,
+  "by_status": { "302": 142 }
 }
 ```
+
+`clicks` counts 302 (redirect) and 303 (redirect after bot check) responses for `/s/{code}` and `/s/{code}/…`. `by_status` shows everything else too, e.g. `200` for Turnstile challenge pages served to `block_bots` links. The command shells out to `npx cf`, which must be logged in (`npx cf auth`) with Analytics Read on the zone.
+
+#### Raw SQL (top codes, custom queries)
+
+`npx cf sql query` runs SQL against the analytics datasets. Queries must be scoped to the zone, and `ORDER BY` requires a `LIMIT`:
+
+```bash
+ZONE_ID=$(npx cf zones list --name yourdomain.com | jq -r '.[0].id')
+
+# Top 20 short codes by redirects over the last 7 days
+npx cf sql query --scope-zone "$ZONE_ID" "
+  SELECT clientRequestPath AS path, SUM(sampleInterval) AS clicks
+  FROM events.httpRequests
+  WHERE clientRequestPath LIKE '/s/%'
+    AND edgeResponseStatus IN (302, 303)
+    AND timestamp >= NOW() - INTERVAL '7' DAY
+  GROUP BY path ORDER BY clicks DESC LIMIT 20
+  FORMAT JSON"
+```
+
+Useful columns include `clientRequestPath`, `clientRequestHttpHost`, `clientRefererHost`, `edgeResponseStatus`, `timestamp` and `sampleInterval`. List them all with:
+
+```bash
+npx cf sql datasets --account-tag <account-id> --dataset-name events.httpRequests --include-columns
+```
+
+#### Dashboard
+
+In the Cloudflare dashboard, open the zone's HTTP traffic analytics and add a filter on path (e.g. starts with `/s/oauth`) to get the same counts as a chart.
 
 ### List all active URLs
 
@@ -479,31 +526,32 @@ Any valid key can revoke itself. This deletes the key from KV and scrubs the own
 
 ## Caching
 
-This worker uses [Cloudflare Workers Cache](https://blog.cloudflare.com/workers-cache/) to serve redirects and stats from edge cache, reducing latency and KV read costs.
+This worker uses [Cloudflare Workers Cache](https://blog.cloudflare.com/workers-cache/) to serve redirects from edge cache, reducing latency and KV read costs.
 
 ### Cached Endpoints
 
 | Endpoint | Cache Duration | Stale-while-revalidate |
 |---|---|---|
 | `GET /s/{code}` (redirect) | 1 hour (`max-age=3600`) | 24 hours |
-| `GET /api/stats/{code}` | 1 minute (`max-age=60`) | 5 minutes |
+
+Not cached (`no-store`): 404 for unknown or deleted codes, 400 for invalid codes, and all `block_bots` responses. A cached 404 would outlive the code being created (creation does not purge the cache), so every request for an unknown code runs the Worker and costs one KV read.
 
 ### How It Works
 
-- **Fresh window** (within `max-age`): The response is served directly from Cloudflare's edge cache. The Worker does NOT run, so click stats are NOT incremented during this window.
-- **Stale window** (`max-age` to `max-age + stale-while-revalidate`): The cached response is served immediately while the Worker runs in the background. Click stats ARE incremented during revalidation.
+- **Fresh window** (within `max-age`): The response is served directly from Cloudflare's edge cache. The Worker does NOT run.
+- **Stale window** (`max-age` to `max-age + stale-while-revalidate`): The cached response is served immediately while the Worker runs in the background to revalidate.
 - **After both windows**: A full cache miss occurs, and the Worker fetches from KV.
 
 ### Cache Invalidation
 
 Cache entries are automatically purged when a URL is mutated:
 
-- **Update** (`PUT /api/urls/{code}`) — purges redirect and stats cache for the affected code(s)
+- **Update** (`PUT /api/urls/{code}`) — purges redirect cache for the affected code(s)
 - **Delete** (`DELETE /api/urls/{code}`) — purges cache so deleted URLs return 404 immediately
 - **Restore** (`POST /api/urls/{code}/restore`) — purges cache so restored URLs are accessible
 - **Permanent delete** (`DELETE /api/urls/{code}/permanent`) — purges cache
 
-Cache tags used: `redirect:{code}` and `stats:{code}`.
+Cache tag used: `redirect:{code}`.
 
 Purges are eventually consistent — expect a few seconds of propagation delay across the edge before a purged code reliably returns a fresh (`MISS`) response.
 
@@ -515,20 +563,55 @@ Cache is enabled in `cloudflare.config.ts` with `cache: { enabled: true }`. The 
 
 Workers Cache is a Cloudflare edge product and is **not** available in `cf dev`. The code guards against `ctx.cache` being undefined, so all endpoints continue to work normally without caching during local development.
 
-## Cost Analysis
+## URL enumeration
 
-Cloudflare Workers **free tier** per day:
-- 100,000 Worker requests
-- 1GB KV storage
-- 100,000 KV reads + 1,000 KV writes
+Short codes are guessable. Generated codes are 6 hex characters, so there are only 16⁶ ≈ 16.7M of them, and `GET /s/{code}` needs no authentication. Anyone can walk the code space and collect every target URL. Treat short links as public: don't rely on an unguessable code to protect a sensitive target URL.
 
-A typical blog gets ~500 short URL clicks/day — well within free tier.
+Scanning also costs you money or availability. Misses are never cached (see [Caching](#caching)), so each guess runs the Worker and does one KV read. On the free plan, about **100,000 requests in a UTC day** (≈1.2/s) exhausts the Worker request quota, and every route — including `/api/*` and `/signup` — fails until midnight UTC. That rate is far too low for Cloudflare's automatic DDoS protection to notice.
 
-| Service | Monthly cost |
-|---------|-------------|
-| Bitly Pro | $29 |
-| TinyURL Pro | $9.99 |
-| **This solution** | **$0** |
+### Rate limiting `/s/*` with a WAF rule
+
+A WAF rate-limiting rule blocks excess requests at the edge, before they reach the Worker. The free plan allows **one** rate-limiting rule, with a fixed 10-second period and 10-second block, counted per IP per data centre.
+
+Check for an existing rule first. The free plan only allows one, and the command below **replaces** the whole `http_ratelimit` ruleset:
+
+```bash
+npx cf rulesets entrypoint get http_ratelimit -z yourdomain.com
+```
+
+If no rate-limit rules exist yet, this **fails with an error**, which is expected and means it's safe to continue:
+
+```
+[10003] could not find entrypoint ruleset in the http_ratelimit phase
+404 Not Found
+```
+
+If it instead prints a ruleset, an existing rule is in place: add it to the `--rules` array below or it will be removed.
+
+Create the rule (20 requests per 10 seconds per IP on `/s/*`):
+
+```bash
+npx cf rulesets entrypoint update http_ratelimit -z yourdomain.com --rules '[{
+  "description": "Short-link enumeration",
+  "expression": "starts_with(http.request.uri.path, \"/s/\")",
+  "action": "block",
+  "ratelimit": {
+    "characteristics": ["ip.src", "cf.colo.id"],
+    "period": 10,
+    "requests_per_period": 20,
+    "mitigation_timeout": 10
+  }
+}]'
+```
+
+Add `--validate-only` to check the rule without saving it. To remove it later, run the same command with `--rules '[]'`.
+
+Notes:
+
+- **Threshold.** A real visitor makes one request per link (plus a POST for `block_bots` links). The rule runs before the cache, so cached redirects count toward the limit too. Keep it generous enough for shared IPs (offices, mobile carrier NAT); 20 per 10 s is a reasonable start.
+- **What it doesn't stop.** A single IP is still allowed up to ~172,800 requests a day, and a scan spread across many IPs is barely slowed. The rule makes enumeration slower and more expensive for the attacker; it doesn't prevent it.
+- **Higher plans** can count only misses (a counting expression on the response code, e.g. `http.response.code eq 404`), use longer periods, and pick other characteristics. Check Cloudflare's rate-limiting docs for which plan unlocks each option.
+- The real fix for guessability is longer codes (e.g. 8+ base62 characters), which makes a scan pointless rather than merely slower. That change would also need the PHP `previewShorten` updated to match.
 
 ## License
 

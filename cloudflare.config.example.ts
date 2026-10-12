@@ -23,10 +23,6 @@ export default defineConfig({
 				zone: "yourdomain.com",
 			}),
 			triggers.fetch({
-				pattern: "yourdomain.com/api/stats/*",
-				zone: "yourdomain.com",
-			}),
-			triggers.fetch({
 				pattern: "yourdomain.com/api/urls*",
 				zone: "yourdomain.com",
 			}),

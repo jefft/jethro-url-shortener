@@ -157,14 +157,52 @@ async function runTests() {
     assert(resp.status === 400, `Expected 400, got ${resp.status}`);
   });
 
-  // Stats
-  console.log('\n📊 Statistics');
-  await test('GET /api/stats/{code} returns stats', async () => {
-    const resp = await fetch(`${BASE_URL}/api/stats/${testCode}`);
-    assert(resp.status === 200, `Expected 200, got ${resp.status}`);
-    const stats = await resp.json();
-    assert(typeof stats.total === 'number', 'stats.total should be a number');
+  // Path/query passthrough
+  console.log('\n↪️  Path and query passthrough');
+  const ptFixtures = {
+    base: 'https://example.com/base/?keep=1&view=home#frag',
+    page: 'https://example.com/page?q=hello%20world',
+    origin: 'https://example.com/',
+  };
+  const ptCodes = {};
+  for (const [name, target] of Object.entries(ptFixtures)) {
+    const code = `pt-${name}-${Date.now()}`;
+    const resp = await fetch(`${BASE_URL}/api/shorten`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ url: target, code, campaign: 'test' }),
+    });
+    if (resp.status === 200) ptCodes[name] = code;
+    else console.log(`  ⚠️  could not create passthrough fixture ${name}: ${resp.status}`);
+  }
+  const ptCases = [
+    ['base', '', ptFixtures.base],
+    ['base', '/x/y', 'https://example.com/base/x/y?keep=1&view=home#frag'],
+    ['base', '//x', 'https://example.com/base/x?keep=1&view=home#frag'],
+    ['base', '?view=admin', 'https://example.com/base/?keep=1&view=admin#frag'],
+    ['base', '/x?a=1&a=2', 'https://example.com/base/x?keep=1&view=home&a=1&a=2#frag'],
+    ['page', '/', 'https://example.com/page/?q=hello%20world'],
+    ['page', '/extra?z=1', 'https://example.com/page/extra?q=hello%20world&z=1'],
+    ['origin', '/?view=admin__system_configuration', 'https://example.com/?view=admin__system_configuration'],
+  ];
+  for (const [name, suffix, expected] of ptCases) {
+    await test(`GET /s/{${name}}${suffix} → ${expected}`, async () => {
+      assert(ptCodes[name], `fixture ${name} missing`);
+      const resp = await fetch(`${BASE_URL}/s/${ptCodes[name]}${suffix}`, { redirect: 'manual' });
+      assert(resp.status === 302, `Expected 302, got ${resp.status}`);
+      const location = resp.headers.get('Location');
+      assert(location === expected, `Expected ${expected}, got ${location}`);
+    });
+  }
+  await test('GET /s/{code}x (unknown code) returns 404', async () => {
+    assert(ptCodes.base, 'fixture base missing');
+    const resp = await fetch(`${BASE_URL}/s/${ptCodes.base}x/y`, { redirect: 'manual' });
+    assert(resp.status === 404, `Expected 404, got ${resp.status}`);
   });
+  for (const code of Object.values(ptCodes)) {
+    await fetch(`${BASE_URL}/api/urls/${code}`, { method: 'DELETE', headers });
+    await fetch(`${BASE_URL}/api/urls/${code}/permanent`, { method: 'DELETE', headers });
+  }
 
   // List
   console.log('\n📋 List URLs');

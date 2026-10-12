@@ -9,9 +9,9 @@
         "ext-hash": "*"
     },
     "autoload": {
-        "files": ["src/UrlShortener.php"]
+        "files": ["src/php/UrlShortener.php"]
     },
     "scripts": {
-        "test": "php test.php"
+        "test": "php src/php/test.php"
     }
 }
